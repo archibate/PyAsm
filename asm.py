@@ -166,6 +166,8 @@ class Assembler():
             sym = m[:ei]
             off = int(m[ei:]) if ei != len(m) else 0
             self.d.seek(padr)
+            if off < 0:
+                off = 0x100 ** self.wwid - 1 - off
             self.d.write(struct.pack(self.wordfmt, off))
             if sym not in unsolves:
                 unsolves[sym] = [padr]
@@ -277,21 +279,30 @@ def assem_main(input, output):
         with open(input) as f:
             for line in f.readlines():
                 lst = asmr.on_line(line)
-        asmr.care_unsolves() # TODO: output the unsolves info!
+        unsolves = asmr.care_unsolves() # TODO: output the unsolves info!
+        unsvtab = '\0'.join(sym for sym in unsolves.keys()).encode('utf-8')
+        for i, pads in enumerate(unsolves.values()):
+            for pad in pads:
+                print('symid =', i, ', paddr =', pad)
 
 
-output = '/dev/null'
-input = '/dev/stdin'
+if __name__ == '__main__':
+    output = None#'/dev/null'
+    input = '/dev/stdin'
 
-from sys import argv
-i = 1
-while i < len(argv):
-    if argv[i] == '-o':
+    from sys import argv
+    i = 1
+    while i < len(argv):
+        if argv[i] == '-o':
+            i += 1
+            output = argv[i]
+        else:
+            input = argv[i]
         i += 1
-        output = argv[i]
-    else:
-        input = argv[i]
-    i += 1
 
-assem_main(input, output)
-#exeoscmd('hexdump', '-C', output)
+    if output is None:
+        print('usage:\npython', argv[0], '?.asm -o ?.bin')
+        exit()
+
+    assem_main(input, output)
+    #exeoscmd('hexdump', '-C', output)
