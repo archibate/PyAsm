@@ -271,11 +271,27 @@ class Assembler():
         self.d.write(bs)
 
 
-with open('test.bin', 'wb+') as fout:
-    asmr = Assembler(fout)
-    with open('test.asm') as f:
-        for line in f.readlines():
-            lst = asmr.on_line(line)
-    asmr.care_unsolves() # TODO: output the unsolves info!
+def assem_main(input, output):
+    with open(output, 'wb+') as fout:
+        asmr = Assembler(fout)
+        with open(input) as f:
+            for line in f.readlines():
+                lst = asmr.on_line(line)
+        asmr.care_unsolves() # TODO: output the unsolves info!
 
-os.system('hexdump -C test.bin')
+
+output = '/dev/null'
+input = '/dev/stdin'
+
+from sys import argv
+i = 1
+while i < len(argv):
+    if argv[i] == '-o':
+        i += 1
+        output = argv[i]
+    else:
+        input = argv[i]
+    i += 1
+
+assem_main(input, output)
+#exeoscmd('hexdump', '-C', output)
