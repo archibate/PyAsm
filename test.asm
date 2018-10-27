@@ -1,4 +1,4 @@
-!orgv 0x7c00
+!def _text
 	mov %edx, #1
 	mov %edx, $_start
 	mov %edx, $boxa+23

@@ -1,0 +1,3 @@
+nnoremap <F4> :wa<CR>
+nnoremap <F8> :wa<CR>:sh<CR><CR>
+nnoremap <F5> :wa<CR>:!./run.sh<CR>

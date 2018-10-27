@@ -1,0 +1,7 @@
+!!adrm
+0000000A box
+0000000F boxa
+!!syms
+box 00000006
+_start 00000001
+boxc 0000000B

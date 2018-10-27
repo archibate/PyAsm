@@ -1,28 +1,9 @@
 #!/usr/bin/env python
 
-import os
+import os, sys
 import struct
-
-
-class _clomk_mktmpname:
-    def __init__(s):
-        s.i = 0
-    def __call__(s, ext=''):
-        s.i += 1
-        bas = '/tmp/tmp' + str(os.getpid())
-        return bas + str(s.i) + ext
-mktmpname = _clomk_mktmpname()
-
-
-# tohex(0xabc, 1) => '0ABC'
-def tohexstr(i, l):
-    s = hex(i)[2:].upper()
-    return '0' * (l - len(s)) + s
-
-
-# b'\xfa\xcd\x91' => 'FACD91'
-def bstohexstr(bs):
-    return ''.join(tohexstr(b, 2) for b in bs)
+from wrinfo import ggwrinfo, mktmpname, print_, tohexstr, bstohexstr
+from wwidr import wwid
 
 
 def exeoscmd(*cmds):
@@ -31,16 +12,17 @@ def exeoscmd(*cmds):
 
 # ehhhhhh....
 def donasm(wwid, cmd, *args):
-    s = cmd + ' ' + ','.join(args)
+    s = cmd + ' ' + ','.join(map(str, args))
     s = 'BITS ' + str(wwid * 8) + '\n' + s
     tmpasm = mktmpname('.asm')
     tmplst = mktmpname('.lst')
-    open(tmpasm, 'w+').write(s)
+    open(tmpasm, 'w').write(s)
     assert not exeoscmd('nasm', tmpasm, '-l', tmplst, '-o', '/dev/null')
     lst = open(tmplst).read()
     os.unlink(tmpasm)
     os.unlink(tmplst)
     lst = lst.splitlines()[1].split()[2].upper()
+    print_(lst, ' ' * (13 - len(lst)), cmd, ','.join(map(str, args)))
     return lst
 
 
@@ -86,22 +68,18 @@ def efinds(m, s):
 
 class Assembler():
 
-    def __init__(self, d, echols=False, addr=0, wwid=4):
+    def __init__(self, d, wwid=4):
         self.d = d
         self.syms = {}
         self.unsv = UnsvController()
         self.usv_sypas = []
+        self.adrmap = {}
         self.wwid = wwid
-        self.padr = 0
-        self.addr = addr
+        self.addr = 0
         self.data = b''
-        self.echols = echols
 
 
     def lookup_sym(self, m):
-        if m == '.': # $. stands for current address in asm
-            return self.addr
-
         sym = m[:efinds(m, '+-')]
         try:
             # if existed, return address
@@ -109,6 +87,10 @@ class Assembler():
         except KeyError:
             # generate an slot in unsv for this symbol (with '+-' info)
             return self.unsv.gen_slot(self.wwid, m)
+
+
+    def gen_slot(self, m):
+        return self.unsv.gen_slot(self.wwid, m)
 
 
     @property
@@ -132,48 +114,53 @@ class Assembler():
 
         self.syms[sym] = addr
 
-        # save the oldpos, we will go far
-        oldpos = self.d.tell()
+        ## save the oldpos, we will go far
+        #oldpos = self.d.tell()
 
         # now slove the unsv symbols!
-        i = 0
-        while i < len(self.usv_sypas):
-            m, padr = self.usv_sypas[i]
-            # remove any character in m after one of '+-'
-            ei = efinds(m, '+-')
-            sym_ = m[:ei]
-            if sym_ == sym: # was it refering to me?
-                off = int(m[ei:]) if ei != len(m) else 0
-                self.d.seek(padr)
-                ad = addr + off
-                self.d.write(struct.pack(self.wordfmt, ad))
-                del self.usv_sypas[i]
-                # note: deleted, so now usv_sypas[i] is just the next
-                # ****: no need to i++ anymore.
-            else:
-                i += 1
+        #i = 0
+        #while i < len(self.usv_sypas):
+        #for m, padr in self.usv_sypas:
+        #    #m, padr = self.usv_sypas[i]
+        #    # remove any character in m after one of '+-'
+        #    ei = efinds(m, '+-')
+        #    sym_ = m[:ei]
+        #    if sym_ == sym: # was it refering to me?
+        #        off = int(m[ei:]) if ei != len(m) else 0
+        #        self.d.seek(padr)
+        #        ad = addr + off
+        #        self.d.write(struct.pack(self.wordfmt, ad))
+        #        #del self.usv_sypas[i]
+        #        ## note: deleted, so now usv_sypas[i] is just the next
+        #        ## ****: no need to i++ anymore.
+        #    #else:
+        #    #    i += 1
 
-        # restore the old position
-        self.d.seek(oldpos)
+        # add addr to solved sym table
+        self.adrmap[sym] = addr
+
+        ## restore the old position
+        #self.d.seek(oldpos)
 
 
-    def care_unsolves(self):
-        unsolves = {}
+    def care_syms(self): # move the fucking slots better
+        syms = {}
         # now left the unsv symbols infos to the linker!
-        for m, padr in self.usv_sypas:
+        for sypa in self.usv_sypas:
+            m, addr = sypa
             # remove any character in m after one of '+-'
             ei = efinds(m, '+-')
-            sym = m[:ei]
-            off = int(m[ei:]) if ei != len(m) else 0
-            self.d.seek(padr)
+            sym, off = m[:ei], m[ei:]
+            off = int(off) if ei != len(m) else 0
+            self.d.seek(addr)
             if off < 0:
-                off = 0x100 ** self.wwid - 1 - off
+                off = 0x100 ** self.wwid + off
             self.d.write(struct.pack(self.wordfmt, off))
-            if sym not in unsolves:
-                unsolves[sym] = [padr]
+            if sym not in syms:
+                syms[sym] = [addr]
             else:
-                unsolves[sym].append(padr)
-        return unsolves
+                syms[sym].append(addr)
+        return syms
 
 
     def compile(self, cmd, *args):
@@ -190,26 +177,27 @@ class Assembler():
             syofs.append((sym, off))
 
         # convert lst into bytes
-        hexs = []
+        bs = b''
         while len(lst):
             h = int(lst[:2], base=16)
             lst = lst[2:]
-            hexs.append(h)
-        bs = bytes(hexs)
+            bs += struct.pack('B', h)
 
         return bs, syofs
 
 
     def parse_arg(self, arg):
-        for h in ['$','#','%']:
-            # check arg prefix
-            if arg[:len(h)] == h:
-                m = arg[len(h):]
-                if h == '$': # $symbol
-                    addr = self.lookup_sym(m)
-                    m = hex(addr)
-                return m
-        raise AssemblerError('cannot parse prefix for: ' + str(arg))
+        # check arg prefix
+        h, m = arg[:1], arg[1:]
+        if h == '$': # $symbol
+            addr = self.gen_slot(m)
+            return addr
+        elif h == '%': # %reg
+            return m
+        elif h == '#': # #immediate
+            return int(m)
+        else:
+            raise AssemblerError('cannot parse prefix for: ' + str(arg))
 
 
     def on_line(self, line):
@@ -235,16 +223,6 @@ class Assembler():
             assert bits % 8 == 0
             self.wwid = bits // 8
             return
-        elif cmd == '!orgv':
-            assert len(args) == 1
-            addr = int(args[0], base=16)
-            self.addr = addr
-            return
-        elif cmd == '!echols':
-            assert len(args) == 1
-            sett = ['on', 'off'].index(args[0])
-            self.echols = True if sett else False
-            return
         elif cmd == '!def':
             assert len(args) == 1
             sym = args[0]
@@ -258,51 +236,67 @@ class Assembler():
 
         # will call to nasm to compile it
         bs, syofs = self.compile(cmd, *args)
+        # now bs is the line compiled result
 
         # add symbol-phys_addr pairs to usv_sypas
         for sym, off in syofs:
-            padr = off + self.padr
-            self.usv_sypas.append((sym, padr))
+            addr = off + self.addr
+            self.usv_sypas.append((sym, addr))
         # this usv_sypas can be dealt in assembler or linker
 
-        if self.echols:
-            print(tohexstr(self.addr, 8), bstohexstr(bs), cmd, ', '.join(args))
-
-        self.padr += len(bs)
         self.addr += len(bs)
         self.d.write(bs)
 
 
-def assem_main(input, output):
-    with open(output, 'wb+') as fout:
-        asmr = Assembler(fout)
-        with open(input) as f:
-            for line in f.readlines():
-                lst = asmr.on_line(line)
-        unsolves = asmr.care_unsolves() # TODO: output the unsolves info!
-        unsvtab = '\0'.join(sym for sym in unsolves.keys()).encode('utf-8')
-        for i, pads in enumerate(unsolves.values()):
+    def write_info(self, finfo):
+        syms = self.care_syms()
+        ggwrinfo(finfo, self.adrmap, syms)
+
+
+    def show_unsolves_info(self, unsolves):
+        #unsvtab = '\0'.join(sym for sym in unsolves.keys()) + '\0'
+        #unsvpds = unsolves.values()
+
+        #unsitp = b''
+        print_('\nUNSOLVES:\n')
+        for i, (sym, pads) in enumerate(unsolves.items()):
+            print_(sym + ':')
             for pad in pads:
-                print('symid =', i, ', paddr =', pad)
+                print_('  ' + tohexstr(pad, 8))
+                #unsitp += struct.pack(self.wordfmt * 2, i, pad)
+
+        #self.d.seek(0, 2) # SEEK_END
+        #self.d.write(unsvtab)
+
+
+def assem_main(input, output, infout):
+    fout = open(output, 'wb') if isinstance(output, str) else output
+    fin = open(input) if isinstance(input, str) else input
+    asmr = Assembler(fout, wwid)
+    for line in fin.readlines():
+        lst = asmr.on_line(line)
+    if isinstance(input, str): fin.close()
+    finfo = open(infout, 'w') if isinstance(infout, str) else infout
+    asmr.write_info(finfo)
+    if isinstance(output, str): fout.close()
+    if isinstance(infout, str): finfo.close()
 
 
 if __name__ == '__main__':
-    output = None#'/dev/null'
-    input = '/dev/stdin'
+    output = '/dev/null'
+    input = sys.stdin
+    infout = sys.stdout
 
-    from sys import argv
     i = 1
-    while i < len(argv):
-        if argv[i] == '-o':
+    while i < len(sys.argv):
+        if sys.argv[i] == '-o':
             i += 1
-            output = argv[i]
+            output = sys.argv[i]
+        elif sys.argv[i] == '-u':
+            i += 1
+            infout = sys.argv[i]
         else:
-            input = argv[i]
+            input = sys.argv[i]
         i += 1
 
-    if output is None:
-        print('usage:\npython', argv[0], '?.asm -o ?.bin')
-        exit()
-
-    assem_main(input, output)
-    #exeoscmd('hexdump', '-C', output)
+    assem_main(input, output, infout)
